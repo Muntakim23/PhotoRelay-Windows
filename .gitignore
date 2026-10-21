@@ -1,0 +1,32 @@
+# Personal Database & State (DO NOT COMMIT)
+*.db
+*.db-wal
+*.db-shm
+gphotos.db
+
+# Authentication Credentials & Tokens (DO NOT COMMIT)
+gotohp.config
+gotohp.config.*
+*.config
+*.key
+*.token
+/EBWebView/
+/gotohp-cache/
+
+# Logs & Temporary Files
+*.log
+*.tmp
+gotohp-cli*.dl
+*.bak
+*.backup
+*.before-*
+watch-folders.txt
+tray-status.txt
+.watcher.pid
+
+# OS Metadata
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

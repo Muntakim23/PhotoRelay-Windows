@@ -1,0 +1,8 @@
+# Enforce LF endings on shell scripts and systemd service files
+*.sh text eol=lf
+*.service text eol=lf
+*.plist text eol=lf
+*.ps1 text eol=crlf
+# Batch labels require CRLF even in GitHub's downloadable source ZIP.
+*.bat -text
+*.vbs text eol=crlf
