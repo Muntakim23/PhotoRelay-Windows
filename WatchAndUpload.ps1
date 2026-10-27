@@ -104,7 +104,6 @@ $extList = @(".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif",
              ".mp4", ".mov", ".mkv", ".avi", ".dng")
 foreach ($e in $extList) { $script:EXT.Add($e) | Out-Null }
 
-$script:MIN_BYTES = 10240   # 10 KB minimum file size
 $script:MAX_RETRY = 3       # Max retry attempts per file
 $script:LOG_RETENTION_DAYS = 30
 
@@ -434,14 +433,19 @@ function Wait-ForFileReady([string]$path) {
 # so a file replaced or edited during the delay is left untouched.
 # ---------------------------------------------------------------------
 function Schedule-DeleteAfterBackup([string]$path, [string]$expectedHash, [long]$expectedLength) {
+    $policyFile = Join-Path $script:BASE "local-file-policy.txt"
+    try {
+        if ((Get-Content -LiteralPath $policyFile -Raw -ErrorAction Stop).Trim() -cne "delete") { return }
+    } catch { return }
+
     if ([string]::IsNullOrWhiteSpace($expectedHash)) {
         Write-Log "Local deletion not scheduled because the file hash could not be verified: $path" "WARN"
         return
     }
 
     try {
-        Start-Job -ArgumentList $path, $expectedHash, $expectedLength -ScriptBlock {
-            param([string]$targetPath, [string]$targetHash, [long]$targetLength)
+        Start-Job -ArgumentList $path, $expectedHash, $expectedLength, $policyFile -ScriptBlock {
+            param([string]$targetPath, [string]$targetHash, [long]$targetLength, [string]$policyPath)
             Start-Sleep -Seconds 30
             try {
                 if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) { return }
@@ -449,6 +453,7 @@ function Schedule-DeleteAfterBackup([string]$path, [string]$expectedHash, [long]
                 if ([long]$currentFile.Length -ne $targetLength) { return }
                 $currentHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
                 if ($currentHash -ne $targetHash.ToLowerInvariant()) { return }
+                if ((Get-Content -LiteralPath $policyPath -Raw -ErrorAction Stop).Trim() -cne "delete") { return }
                 Remove-Item -LiteralPath $targetPath -Force -ErrorAction Stop
             } catch {
                 # If the file cannot be verified or deleted, preserve it.
@@ -546,6 +551,9 @@ function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
             return
         }
 
+        # Capture the pre-upload content so changed files are never deleted.
+        $preUploadHash = Get-FileHashSafe $path
+
         # Start gotohp-cli and render live active progress bar with elapsed time
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:GOTOHP
@@ -620,8 +628,12 @@ function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
             $contentHash = Get-FileHashSafe $path
             Safe-ConsoleWrite("`r  [$doneBar] 100% [OK] Uploaded in $($totalTime)s: $name ($sizeLabel)        `n")
             Write-Log "SUCCESS | $name ($sizeLabel in $($totalTime)s)" "OK"
-            Save-Upload $path $mediaKey $name $fileInfo.Length $contentHash | Out-Null
-            Schedule-DeleteAfterBackup $path $contentHash $fileInfo.Length
+            $saved = Save-Upload $path $mediaKey $name $fileInfo.Length $contentHash
+            if ($saved -and $preUploadHash -and $preUploadHash -eq $contentHash) {
+                Schedule-DeleteAfterBackup $path $preUploadHash $fileInfo.Length
+            } else {
+                Write-Log "Local copy preserved because upload persistence or content verification failed: $name" "WARN"
+            }
         } else {
             $uploadFailed = $true
             if ($timedOut) {
@@ -699,32 +711,64 @@ if ($StopWatcher) {
     return
 }
 
+function Enable-PhotoRelayStartup([string]$startupFolder) {
+    $ws = New-Object -ComObject WScript.Shell
+    $vbsPath = Join-Path $script:BASE 'StartPhotosWatcher.vbs'
+    $trayPath = Join-Path $script:BASE 'PhotosTray.ps1'
+    $entries = @(
+        @{ Name = 'PhotoRelay-Windows Uploader.lnk'; Target = (Join-Path $env:WINDIR 'System32\wscript.exe'); Args = ('//B "' + $vbsPath + '"'); Script = $vbsPath },
+        @{ Name = 'PhotoRelay-Windows Tray.lnk'; Target = (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'); Args = ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + $trayPath + '"'); Script = $trayPath }
+    )
+    foreach ($entry in $entries) {
+        $shortcutPath = Join-Path $startupFolder $entry.Name
+        $shortcut = $ws.CreateShortcut($shortcutPath)
+        if ([System.IO.File]::Exists($shortcutPath) -and $shortcut.Arguments.IndexOf(('"' + $entry.Script + '"'), [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "Startup shortcut belongs to another installation: $shortcutPath"
+        }
+    }
+    foreach ($entry in $entries) {
+        $shortcut = $ws.CreateShortcut((Join-Path $startupFolder $entry.Name))
+        $shortcut.TargetPath = $entry.Target
+        $shortcut.Arguments = $entry.Args
+        $shortcut.WorkingDirectory = $script:BASE
+        $shortcut.Save()
+    }
+}
+
 if ($EnableStartup) {
     Write-Host "Setting up PhotoRelay-Windows to run on Windows startup..." -ForegroundColor Cyan
     $startupFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
-    $shortcutPath = Join-Path $startupFolder "PhotoRelay-Windows.lnk"
-    $vbsPath = Join-Path $script:BASE "StartPhotosWatcher.vbs"
-    $ws = New-Object -ComObject WScript.Shell
-    $s = $ws.CreateShortcut($shortcutPath)
-    $s.TargetPath = $vbsPath
-    $s.WorkingDirectory = $script:BASE
-    $s.Description = "PhotoRelay-Windows Auto-Sync Watcher"
-    $s.Save()
-    Write-Host "[OK] Startup shortcut created: $shortcutPath" -ForegroundColor Green
+    Enable-PhotoRelayStartup $startupFolder
+    Write-Host "[OK] Uploader and tray startup shortcuts created." -ForegroundColor Green
     Write-Host "PhotoRelay-Windows will now start automatically in the background on sign-in." -ForegroundColor Yellow
     return
+}
+
+function Disable-PhotoRelayStartup([string]$startupFolder) {
+    $ws = New-Object -ComObject WScript.Shell
+    $scripts = @('StartPhotosWatcher.vbs', 'WatchAndUpload.ps1', 'PhotosTray.ps1') | ForEach-Object { Join-Path $script:BASE $_ }
+    foreach ($name in @('PhotoRelay-Windows.lnk', 'PhotoRelay-Windows Uploader.lnk', 'PhotoRelay-Windows Tray.lnk')) {
+        $shortcutPath = Join-Path $startupFolder $name
+        if (-not [System.IO.File]::Exists($shortcutPath)) { continue }
+        $shortcut = $ws.CreateShortcut($shortcutPath)
+        $owned = $false
+        foreach ($scriptPath in $scripts) {
+            if ($shortcut.TargetPath -eq $scriptPath -or $shortcut.Arguments.IndexOf(('"' + $scriptPath + '"'), [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $owned = $true
+                break
+            }
+        }
+        if ($owned) {
+            Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction Stop
+            Write-Host "[OK] Removed startup shortcut: $shortcutPath" -ForegroundColor Green
+        }
+    }
 }
 
 if ($DisableStartup) {
     Write-Host "Removing PhotoRelay-Windows from Windows startup..." -ForegroundColor Cyan
     $startupFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
-    $shortcutPath = Join-Path $startupFolder "PhotoRelay-Windows.lnk"
-    if ([System.IO.File]::Exists($shortcutPath)) {
-        Remove-Item -LiteralPath $shortcutPath -Force
-        Write-Host "[OK] Startup shortcut removed successfully." -ForegroundColor Green
-    } else {
-        Write-Host "Startup shortcut was not present." -ForegroundColor Yellow
-    }
+    Disable-PhotoRelayStartup $startupFolder
     return
 }
 

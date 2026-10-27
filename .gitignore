@@ -22,6 +22,7 @@ gotohp-cli*.dl
 *.before-*
 watch-folders.txt
 tray-status.txt
+local-file-policy.txt
 .watcher.pid
 
 # OS Metadata

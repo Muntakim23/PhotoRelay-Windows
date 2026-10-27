@@ -3,7 +3,7 @@
 PhotoRelay-Windows watches selected folders and uploads supported photos and videos to Google Photos using the bundled [`gotohp`](https://github.com/xob0t/gotohp) client. Windows is the primary setup; a separate shell runner is included for macOS and Linux.
 
 > [!IMPORTANT]
-> After a confirmed upload, the Windows watcher schedules the local file for deletion after 30 seconds. Before deleting, it verifies that the file still has the same size and SHA-256 hash. Keep another copy if you want the original to remain on this computer.
+> Windows keeps local files by default. If you select **Delete after upload** in the BAT menu, the watcher schedules local files for deletion 30 seconds after a confirmed upload, checking the size and SHA-256 hash before deletion. Keep another backup of important media.
 
 ## Features
 
@@ -52,6 +52,8 @@ PhotoRelay-Windows watches selected folders and uploads supported photos and vid
    ```
 
 The Windows setup is per user. Run it from the same Windows account that will sign in and use the watcher. If you move the project folder, run `OneTime-Setup.bat` again to refresh its Startup shortcuts.
+
+In `PhotoRelay-Windows.bat`, choose **Local files after upload** to keep files (the default) or delete them after a successful upload. The selection is saved locally in `local-file-policy.txt`. A missing, unreadable or invalid setting keeps files. A running watcher from an older version must be restarted for this setting to take effect; deletion jobs already started by that older version do not read the new setting.
 
 ## Authentication and account setup
 
@@ -146,9 +148,9 @@ Use `./PhotoRelay-Windows.sh help` to see all available commands.
 
 ## Watched folders and supported files
 
-On Windows, the first setup uses only the current user's `Pictures` folder. The selected paths are stored in `watch-folders.txt`, one folder per line. Use `FolderManager.bat` to edit this list. Setup does not automatically add Downloads, Desktop, Documents, or Music.
+On Windows, the first setup uses only the current user's `Pictures` folder. The selected paths are stored in `watch-folders.txt`, one folder per line. Use `FolderManager.bat` to edit this list, then restart the watcher to apply changes. Setup does not automatically add Downloads, Desktop, Documents, or Music.
 
-The Windows watcher currently accepts these extensions (case-insensitive) and ignores files smaller than 10 KB:
+The Windows watcher currently accepts these extensions (case-insensitive):
 
 - Images: `.jpg`, `.jpeg`, `.png`, `.heic`, `.webp`, `.gif`, `.dng`
 - Videos: `.mp4`, `.mov`, `.mkv`, `.avi`
@@ -172,15 +174,15 @@ Authentication is handled by the bundled `gotohp` application or its supported C
 - **No uploads:** check that setup has created `watch-folders.txt` and that it lists the folder; in PowerShell use `.\PhotoRelay-Windows.bat status` and `.\PhotoRelay-Windows.bat logs` (omit `.\` in Command Prompt).
 - **No tray icon:** check Windows' hidden-icons arrow. Start `PhotosTray.ps1` from PowerShell to see diagnostic errors.
 - **Startup stopped after moving the folder:** run `OneTime-Setup.bat` again from the new location.
-- **A file is not uploaded yet:** wait for the download or export to finish; files under 10 KB and unsupported extensions are skipped.
-- **A file disappeared after upload:** this is the documented 30-second local cleanup behavior. Keep a separate copy for local retention.
+- **A file is not uploaded yet:** wait for the download or export to finish; unsupported extensions are skipped.
+- **A file disappeared after upload:** check the local files setting in `PhotoRelay-Windows.bat`. Delete mode schedules cleanup after 30 seconds.
 
 ## Limitations
 
 - PhotoRelay-Windows is an independent project and is not affiliated with or endorsed by Google.
 - Upload behavior depends on the third-party `gotohp` client and Google service behavior. No storage quota, upload quality, or continued availability is guaranteed.
 - Cloud-only placeholders must be downloaded locally before the watcher can read them.
-- Keep independent backups of important media, especially because successful Windows uploads trigger local-file cleanup.
+- Keep independent backups of important media, especially when local-file deletion is enabled.
 
 ## Credits
 

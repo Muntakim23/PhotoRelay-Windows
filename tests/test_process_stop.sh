@@ -93,6 +93,26 @@ fi
 assert_true "Stale PID file safely cleaned up without sending signal to dead PID" 1
 assert_true "Stale PID did not report false positive termination" "$([ $stale_stopped -eq 0 ] && echo 1 || echo 0)"
 
+# Exercise the real stop function with unrelated process matches, without signalling them.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STOP_FUNCTION="$(sed -n '/^do_stop() {/,/^}$/p' "$SCRIPT_DIR/PhotoRelay-Windows.sh")"
+(
+    eval "$STOP_FUNCTION"
+    OS=Linux
+    CYAN='' GREEN='' YELLOW='' NC=''
+    PID_FILE="$TEMP_DIR/missing.pid"
+    SERVICE_NAME=PhotoRelay-Windows.service
+    pgrep() { echo 888888; }
+    kill() { printf '%s\n' "$*" >> "$TEMP_DIR/signalled"; }
+    systemctl() { return 1; }
+    do_stop >/dev/null
+)
+if [ ! -e "$TEMP_DIR/signalled" ]; then
+    assert_true "Real stop function leaves unrelated processes alone" 1
+else
+    assert_true "Real stop function leaves unrelated processes alone" 0
+fi
+
 echo "=========================================================="
 echo "  RESULTS: $PASSED Passed, $FAILED Failed"
 echo "=========================================================="

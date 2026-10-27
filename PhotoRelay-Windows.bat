@@ -26,10 +26,11 @@ echo   [4] View Activity Logs
 echo   [5] Enable Auto-Start on Windows Boot
 echo   [6] Disable Auto-Start on Windows Boot
 echo   [7] Stop Background Watcher
+echo   [8] Local files after upload
 echo   [0] Exit
 echo ==========================================================
 set "choice="
-set /p "choice=Select an option [1-7, Default: 1]: "
+set /p "choice=Select an option [1-8, Default: 1]: "
 if "%choice%"=="" set "choice=1"
 if "%choice%"=="1" goto run_watcher
 if "%choice%"=="2" goto run_silent
@@ -38,6 +39,7 @@ if "%choice%"=="4" goto view_logs
 if "%choice%"=="5" goto enable_startup
 if "%choice%"=="6" goto disable_startup
 if "%choice%"=="7" goto stop_watcher
+if "%choice%"=="8" goto local_files
 if "%choice%"=="0" exit /b 0
 echo Invalid option.
 timeout /t 2 >nul
@@ -111,3 +113,28 @@ if "%IS_MENU%"=="1" cls
 %PS_CMD% -File "%~dp0WatchAndUpload.ps1" -StopWatcher
 if "%IS_MENU%"=="1" (pause & goto menu)
 exit /b %ERRORLEVEL%
+
+:local_files
+cls
+echo Local files after upload
+findstr /x /c:"delete" "%~dp0local-file-policy.txt" >nul 2>&1
+if errorlevel 1 (echo Current setting: KEEP local files) else (echo Current setting: DELETE after upload)
+echo.
+echo [K] Keep local files
+echo [D] Delete local files after a confirmed upload
+choice /c KD /n /m "Choose K or D: "
+if errorlevel 2 goto local_files_delete
+> "%~dp0local-file-policy.txt" echo keep
+if errorlevel 1 (echo Could not save setting.) else (echo Local files will be kept.)
+pause
+goto menu
+
+:local_files_delete
+echo.
+echo This will delete local files after confirmed upload and verification.
+choice /c YN /n /m "Enable deletion? [Y/N]: "
+if errorlevel 2 goto local_files
+> "%~dp0local-file-policy.txt" echo delete
+if errorlevel 1 (echo Could not save setting.) else (echo Local files will be deleted after successful upload.)
+pause
+goto menu

@@ -594,45 +594,12 @@ do_stop() {
         rm -f "$PID_FILE" 2>/dev/null || true
     fi
 
-    # 2. Scoped fallback for any background watcher instances running this script
-    local pids
-    pids=$(pgrep -f "PhotoRelay-Windows\.sh.*watch" || true)
-    if [ -n "$pids" ]; then
-        for pid in $pids; do
-            if [ "$pid" != "$$" ]; then
-                kill "$pid" 2>/dev/null || true
-                echo -e "${GREEN}[OK] Terminated watcher PID $pid${NC}"
-                stopped=1
-            fi
-        done
-    fi
-
     if [ "$OS" = "Darwin" ]; then
         # Terminate macOS launchd agent if active
         launchctl stop com.photorelay.watcher 2>/dev/null || true
         # Stop the previous label during migration from older installs.
         launchctl stop com.googleunlimited.watcher 2>/dev/null || true
-        local fpids
-        fpids=$(pgrep -f "fswatch.*$SCRIPT_DIR" || true)
-        if [ -n "$fpids" ]; then
-            for fpid in $fpids; do
-                kill "$fpid" 2>/dev/null || true
-                echo -e "${GREEN}[OK] Stopped fswatch listener PID $fpid${NC}"
-                stopped=1
-            done
-        fi
     else
-        # Terminate orphaned inotifywait listeners strictly scoped to watched paths
-        local ipids
-        ipids=$(pgrep -f "inotifywait -m -r -e close_write,moved_to,create" || true)
-        if [ -n "$ipids" ]; then
-            for ipid in $ipids; do
-                kill "$ipid" 2>/dev/null || true
-                echo -e "${GREEN}[OK] Stopped inotifywait listener PID $ipid${NC}"
-                stopped=1
-            done
-        fi
-
         # Terminate systemd user service if active
         if command -v systemctl >/dev/null 2>&1; then
             if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
@@ -1071,18 +1038,18 @@ do_watch() {
         echo -e "${YELLOW}[Phase 2] Real-time watcher active (fswatch).${NC}"
         echo "  Waiting for new media... Press Ctrl+C to stop."
 
-        fswatch -r -e "/\\." "${watch_dirs[@]}" 2>/dev/null | while IFS= read -r new_path; do
+        while IFS= read -r new_path; do
             invoke_upload "$new_path"
-        done &
+        done < <(fswatch -r -e "/\\." "${watch_dirs[@]}" 2>/dev/null) &
         watcher_pid=$!
     else
         echo ""
         echo -e "${YELLOW}[Phase 2] Real-time watcher active (inotifywait).${NC}"
         echo "  Waiting for new media... Press Ctrl+C to stop."
 
-        inotifywait -m -r -e close_write,moved_to,create --format '%w%f' "${watch_dirs[@]}" 2>/dev/null | while IFS= read -r new_path; do
+        while IFS= read -r new_path; do
             invoke_upload "$new_path"
-        done &
+        done < <(inotifywait -m -r -e close_write,moved_to,create --format '%w%f' "${watch_dirs[@]}" 2>/dev/null) &
         watcher_pid=$!
     fi
 
@@ -1095,11 +1062,6 @@ do_watch() {
         if [ -n "${watcher_pid:-}" ]; then
             pkill -P "$watcher_pid" 2>/dev/null || true
             kill "$watcher_pid" 2>/dev/null || true
-        fi
-        if [ "$OS" = "Darwin" ]; then
-            pkill -f "fswatch.*$SCRIPT_DIR" 2>/dev/null || true
-        else
-            pkill -f "inotifywait.*${watch_dirs[0]}" 2>/dev/null || true
         fi
         exit 0
     }

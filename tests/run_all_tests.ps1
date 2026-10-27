@@ -9,7 +9,10 @@ $testFiles = @(
     "test_deadlock.ps1",
     "test_dedup.ps1",
     "test_persistence.ps1",
-    "test_single_instance.ps1"
+    "test_single_instance.ps1",
+    "test_local_file_policy.ps1",
+    "test_upload_deletion_guard.ps1",
+    "test_startup_shortcuts.ps1"
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
