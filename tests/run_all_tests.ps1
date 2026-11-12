@@ -8,10 +8,14 @@ $testFiles = @(
     "test_quoting.ps1",
     "test_deadlock.ps1",
     "test_dedup.ps1",
+    "test_upload_dedup_actual.ps1",
+    "test_scan_candidates.ps1",
     "test_persistence.ps1",
     "test_single_instance.ps1",
+    "test_tray_start.ps1",
     "test_local_file_policy.ps1",
     "test_upload_deletion_guard.ps1",
+    "test_upload_exception_retry.ps1",
     "test_startup_shortcuts.ps1"
 )
 

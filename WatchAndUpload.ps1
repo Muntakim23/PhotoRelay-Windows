@@ -478,7 +478,6 @@ function Set-TrayStatus([ValidateSet("uploading", "idle", "error")][string]$stat
     } catch {}
 }
 
-if (-not $utilityMode) { Set-TrayStatus "idle" }
 function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
     if ($path.Contains("\Modules\")) { return }
     $ext = [System.IO.Path]::GetExtension($path).ToLower()
@@ -488,36 +487,6 @@ function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
     $name = [System.IO.Path]::GetFileName($path)
     $fileInfo = New-Object System.IO.FileInfo($path)
     if (-not $fileInfo.Exists) { return }
-
-    # Dual-boot cross-platform deduplication check (avoids duplicate uploads across OSes)
-    $lookupKey = "$name|$($fileInfo.Length)"
-    if ($script:fileLookup.Contains($lookupKey)) {
-        # File with identical name and size exists in database. Check hash to avoid false collisions.
-        $candidateHash = Get-FileHashSafe $path
-        $existing = Invoke-SqliteQuery -DataSource $script:DB `
-            -Query "SELECT content_hash FROM uploads WHERE file_name = @fn AND file_size = @fs AND file_size > 0 LIMIT 1" `
-            -SqlParameters @{ fn = $name; fs = $fileInfo.Length } -ErrorAction SilentlyContinue
-        
-        $isDuplicate = $false
-        if ($existing -and $existing.content_hash) {
-            if ($existing.content_hash -eq $candidateHash) {
-                $isDuplicate = $true
-            }
-        } elseif ($existing) {
-            # Legacy entry without hash: backfill hash and treat as duplicate
-            $isDuplicate = $true
-            if ($candidateHash) {
-                Invoke-SqliteQuery -DataSource $script:DB `
-                    -Query "UPDATE uploads SET content_hash = @h WHERE file_name = @fn AND file_size = @fs AND content_hash IS NULL" `
-                    -SqlParameters @{ h = $candidateHash; fn = $name; fs = $fileInfo.Length } -ErrorAction SilentlyContinue | Out-Null
-            }
-        }
-
-        if ($isDuplicate) {
-            Save-Upload $path "DUAL_BOOT_SYNC" $name $fileInfo.Length $candidateHash | Out-Null
-            return
-        }
-    }
 
     if (-not $script:inFlight.Add($path)) { return }
 
@@ -551,8 +520,19 @@ function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
             return
         }
 
-        # Capture the pre-upload content so changed files are never deleted.
+        # Compare stable content and use the same hash to guard local deletion.
+        $fileInfo.Refresh()
         $preUploadHash = Get-FileHashSafe $path
+        $lookupKey = "$name|$($fileInfo.Length)"
+        if ($preUploadHash -and $script:fileLookup.Contains($lookupKey)) {
+            $existing = Invoke-SqliteQuery -DataSource $script:DB `
+                -Query "SELECT COUNT(*) AS matches FROM uploads WHERE file_name = @fn AND file_size = @fs AND content_hash = @hash COLLATE NOCASE" `
+                -SqlParameters @{ fn = $name; fs = $fileInfo.Length; hash = $preUploadHash } -ErrorAction Stop
+            if ($existing.matches -gt 0) {
+                Save-Upload $path "DUAL_BOOT_SYNC" $name $fileInfo.Length $preUploadHash | Out-Null
+                return
+            }
+        }
 
         # Start gotohp-cli and render live active progress bar with elapsed time
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -662,6 +642,14 @@ function Invoke-Upload([string]$path, [int]$current = 1, [int]$total = 1) {
     } catch {
         $uploadFailed = $true
         Write-Log "EXCEPTION for $([System.IO.Path]::GetFileName($path)): $_" "ERROR"
+        $attempts = 1
+        if ($script:retryMap.ContainsKey($path)) { $attempts = $script:retryMap[$path] + 1 }
+        if ($attempts -ge $script:MAX_RETRY) {
+            Write-Log "GAVE UP after $attempts upload attempts: $name" "ERROR"
+            Remove-Retry $path
+        } else {
+            Save-Retry $path $attempts
+        }
     } finally {
         $null = $script:inFlight.Remove($path)
         if ($script:inFlight.Count -gt 0) {
@@ -865,6 +853,18 @@ if ($ShowLogs) {
     return
 }
 
+function Start-PhotoRelayTray {
+    $trayScript = Join-Path $script:BASE 'PhotosTray.ps1'
+    $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    try {
+        Start-Process -FilePath $powershell -ArgumentList ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + $trayScript + '"') -WorkingDirectory $script:BASE -WindowStyle Hidden
+    } catch {
+        Write-Warning "Could not start the tray icon: $_"
+    }
+}
+
+Start-PhotoRelayTray
+
 # Only one uploader may monitor folders in this Windows logon session.
 $script:watcherMutex = New-Object System.Threading.Mutex($false, "Local\PhotoRelayWatcher")
 $script:ownsWatcherMutex = $false
@@ -878,6 +878,7 @@ if (-not $script:ownsWatcherMutex) {
     $script:watcherMutex.Dispose()
     return
 }
+Set-TrayStatus "idle"
 
 # ---------------------------------------------------------------------
 # PHASE 1 - Startup scan for unrecorded files
@@ -893,8 +894,7 @@ foreach ($dir in $script:WATCH_DIRS) {
             Where-Object {
                 $script:EXT.Contains($_.Extension.ToLower()) -and
                 -not $_.FullName.Contains("\Modules\") -and
-                -not $script:history.Contains($_.FullName) -and
-                -not $script:fileLookup.Contains("$($_.Name)|$($_.Length)")
+                -not $script:history.Contains($_.FullName)
             } | ForEach-Object { $unrecorded.Add($_) }
     } catch {
         Write-Log "Scan error in $dir - $_" "WARN"
@@ -978,7 +978,6 @@ foreach ($dir in $script:WATCH_DIRS) {
                             $script:EXT.Contains($_.Extension.ToLower()) -and
                             -not $_.FullName.Contains("\Modules\") -and
                             -not $script:history.Contains($_.FullName) -and
-                            -not $script:fileLookup.Contains("$($_.Name)|$($_.Length)") -and
                             -not $script:inFlight.Contains($_.FullName) -and
                             $_.LastWriteTime -gt ([DateTime]::Now.AddMinutes(-10))
                         } | ForEach-Object {

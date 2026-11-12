@@ -61,23 +61,11 @@ function Test-IsDuplicate([string]$path, [string]$dbPath) {
 
     # 2. Check candidate hash against DB records with matching name and size
     $candidateHash = Get-FileHashSafe $path
+    if (-not $candidateHash) { return $false }
     $existing = Invoke-SqliteQuery -DataSource $dbPath `
-        -Query "SELECT content_hash FROM uploads WHERE file_name = @fn AND file_size = @fs AND file_size > 0 LIMIT 1" `
-        -SqlParameters @{ fn = $name; fs = $size }
-
-    if ($existing -and $existing.content_hash) {
-        if ($existing.content_hash -eq $candidateHash) {
-            return $true
-        } else {
-            # Different content hash -> NOT duplicate! (BUG-05 fix)
-            return $false
-        }
-    } elseif ($existing) {
-        # Legacy entry without hash: treat as duplicate and backfill
-        return $true
-    }
-
-    return $false
+        -Query "SELECT COUNT(*) AS cnt FROM uploads WHERE file_name = @fn AND file_size = @fs AND content_hash = @hash COLLATE NOCASE" `
+        -SqlParameters @{ fn = $name; fs = $size; hash = $candidateHash }
+    return $existing.cnt -gt 0
 }
 
 $passed = 0
@@ -132,8 +120,8 @@ try {
         -Query "INSERT INTO uploads(path, media_key, file_name, file_size, content_hash) VALUES (@p, 'KEY_LEGACY', 'legacy.png', 2048, NULL)" `
         -SqlParameters @{ p = "D:\OldWindows\legacy.png" }
     
-    # Query with new local path: should match legacy record gracefully
-    Assert-Result "Legacy entry without content_hash matches gracefully" (Test-IsDuplicate $fileLegacy $testDb) $true
+    # A legacy entry cannot prove that another file has identical content.
+    Assert-Result "Legacy entry without content_hash is not assumed to match" (Test-IsDuplicate $fileLegacy $testDb) $false
 
 } finally {
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue

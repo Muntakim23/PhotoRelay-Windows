@@ -155,11 +155,13 @@ The Windows watcher currently accepts these extensions (case-insensitive):
 - Images: `.jpg`, `.jpeg`, `.png`, `.heic`, `.webp`, `.gif`, `.dng`
 - Videos: `.mp4`, `.mov`, `.mkv`, `.avi`
 
+The Windows watcher only treats a file in a different location as already uploaded when a recorded content hash matches. An older record without a hash cannot prove a match, so the file may be uploaded again.
+
 Files that are still growing or locked by another program stay queued until they are ready or disappear. The Windows watcher retries failed uploads up to three times and performs a safety scan every two minutes.
 
 ## Background startup
 
-On Windows, `OneTime-Setup.bat` creates per-user Startup shortcuts. `StartPhotosWatcher.vbs` launches the PowerShell watcher hidden, and `PhotosTray.ps1` runs separately to display status. The shortcuts point back to this folder so the scripts can find their bundled dependencies. No Windows service or machine-wide startup entry is installed.
+On Windows, `OneTime-Setup.bat` creates per-user Startup shortcuts. `StartPhotosWatcher.vbs` launches the PowerShell watcher hidden, and `PhotosTray.ps1` runs separately to display status. Starting the watcher also starts the tray icon if it is not already running. The shortcuts point back to this folder so the scripts can find their bundled dependencies. No Windows service or machine-wide startup entry is installed.
 
 On macOS and Linux, `PhotoRelay-Windows.sh enable` configures a user login service. Use the corresponding `disable` command to remove it.
 
